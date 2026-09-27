@@ -1,7 +1,7 @@
 import asyncio
 
 from swarmsearch.coordinator import SwarmCoordinator
-from swarmsearch.models import UAVState
+from swarmsearch.models import MissionState, UAVState
 
 
 IMPORTANT_EVENTS = {
@@ -34,30 +34,104 @@ def print_event(event):
     )
 
 
-async def wait_for_state(
+async def wait_for_mission_takeoff(
     coordinator: SwarmCoordinator,
-    vehicle_name: str,
-    state: UAVState,
-    timeout: float = 30.0,
+    timeout: float = 90.0,
 ):
+    """
+    Wait for initialization / EKF / home acquisition to finish.
+
+    This timeout is intentionally longer because a fresh SITL startup
+    may require significantly more time than an already-warm instance.
+    """
+
     start = asyncio.get_running_loop().time()
 
     while True:
-        vehicle = coordinator.fleet[vehicle_name]
+        state = coordinator.status.state
 
-        if vehicle.status.state == state:
+        if state == MissionState.TAKING_OFF:
+            return
+
+        if state == MissionState.ABORTED:
+            raise RuntimeError(
+                "Mission aborted before takeoff."
+            )
+
+        elapsed = (
+            asyncio.get_running_loop().time()
+            - start
+        )
+
+        if elapsed >= timeout:
+            raise TimeoutError(
+                "Mission did not enter TAKING_OFF "
+                f"within {timeout}s. "
+                f"Current state: {state.value}"
+            )
+
+        await asyncio.sleep(0.05)
+
+
+async def wait_for_mid_climb(
+    coordinator: SwarmCoordinator,
+    vehicle_name: str,
+    minimum_altitude: float = 1.0,
+    timeout: float = 20.0,
+):
+    """
+    Once the mission is actually taking off, wait until the selected UAV
+    is physically above the requested altitude while still TAKING_OFF.
+    """
+
+    start = asyncio.get_running_loop().time()
+
+    while True:
+        vehicle = coordinator.fleet[
+            vehicle_name
+        ]
+
+        if (
+            vehicle.status.state
+            == UAVState.TAKING_OFF
+            and vehicle.status.altitude
+            >= minimum_altitude
+        ):
             return
 
         if (
+            vehicle.status.state
+            == UAVState.FAILED
+        ):
+            raise RuntimeError(
+                f"{vehicle_name} failed before "
+                "the planned fault injection."
+            )
+
+        if (
+            vehicle.status.state
+            == UAVState.AIRBORNE
+        ):
+            raise RuntimeError(
+                f"{vehicle_name} completed takeoff "
+                "before the test could inject a "
+                "mid-climb failure."
+            )
+
+        elapsed = (
             asyncio.get_running_loop().time()
             - start
-            >= timeout
-        ):
+        )
+
+        if elapsed >= timeout:
             raise TimeoutError(
                 f"{vehicle_name} did not reach "
-                f"{state.value} within {timeout}s. "
+                f"{minimum_altitude:.1f}m during "
+                f"TAKING_OFF within {timeout}s. "
                 f"Current state: "
-                f"{vehicle.status.state.value}"
+                f"{vehicle.status.state.value}, "
+                f"altitude: "
+                f"{vehicle.status.altitude:.2f}m"
             )
 
         await asyncio.sleep(0.05)
@@ -74,21 +148,33 @@ async def main():
 
     print()
     print("==============================")
-    print(" WAITING FOR UAV-2 TAKEOFF")
+    print(" WAITING FOR MISSION TAKEOFF")
     print("==============================")
     print()
 
-    await wait_for_state(
-        coordinator,
-        "UAV-2",
-        UAVState.TAKING_OFF,
+    await wait_for_mission_takeoff(
+        coordinator
     )
 
-    # Give UAV-2 enough time to leave the ground so this is
-    # genuinely a mid-climb failure rather than a pre-takeoff one.
-    await asyncio.sleep(2.0)
+    print()
+    print("==============================")
+    print(" WAITING FOR UAV-2 MID-CLIMB")
+    print("==============================")
+    print()
 
-    vehicle = coordinator.fleet["UAV-2"]
+    await wait_for_mid_climb(
+        coordinator,
+        "UAV-2",
+        minimum_altitude=1.0,
+    )
+
+    vehicle = coordinator.fleet[
+        "UAV-2"
+    ]
+
+    altitude_before_failure = (
+        vehicle.status.altitude
+    )
 
     print()
     print("==============================")
@@ -96,13 +182,15 @@ async def main():
     print("==============================")
     print(
         f"UAV-2 altitude before failure: "
-        f"{vehicle.status.altitude:.2f}m"
+        f"{altitude_before_failure:.2f}m"
     )
     print()
 
     coordinator.inject_failure(
         "UAV-2",
-        reason="takeoff-phase test failure",
+        reason=(
+            "mid-climb takeoff test failure"
+        ),
     )
 
     await mission_task
@@ -128,8 +216,12 @@ async def main():
         f"{coordinator.status.recovery_count}"
     )
 
+    assert altitude_before_failure >= 1.0
+
     assert (
-        coordinator.fleet["UAV-2"].status.state
+        coordinator.fleet[
+            "UAV-2"
+        ].status.state
         == UAVState.FAILED
     )
 
@@ -143,8 +235,15 @@ async def main():
         >= 1
     )
 
+    assert (
+        coordinator.status.state
+        == MissionState.COMPLETED
+    )
+
     print()
-    print("TAKEOFF FAILURE TEST: PASS")
+    print(
+        "MID-CLIMB TAKEOFF FAILURE TEST: PASS"
+    )
 
 
 if __name__ == "__main__":
