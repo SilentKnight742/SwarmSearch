@@ -10,6 +10,7 @@ class UAVState(str, Enum):
 
     ARMING = "arming"
     TAKING_OFF = "taking_off"
+    AIRBORNE = "airborne"
 
     SEARCHING = "searching"
     RECOVERING = "recovering"
