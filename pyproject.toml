@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "swarmsearch"
+version = "0.1.0"
+description = "Fault-tolerant cooperative multi-UAV search and recovery using ArduPilot SITL and MAVLink."
+requires-python = ">=3.11"
+
+dependencies = [
+    "pymavlink",
+]
+
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
