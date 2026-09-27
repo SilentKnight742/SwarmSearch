@@ -20,6 +20,7 @@ IMPORTANT_EVENTS = {
     "uav.failure_requested",
     "uav.failed",
     "uav.failure_land_requested",
+    "uav.failure_land_failed",
 }
 
 
@@ -39,10 +40,11 @@ async def wait_for_mission_takeoff(
     timeout: float = 90.0,
 ):
     """
-    Wait for initialization / EKF / home acquisition to finish.
+    Wait for initialization, home acquisition and EKF readiness
+    to complete.
 
-    This timeout is intentionally longer because a fresh SITL startup
-    may require significantly more time than an already-warm instance.
+    Fresh SITL instances can take substantially longer than
+    already-warm vehicles.
     """
 
     start = asyncio.get_running_loop().time()
@@ -80,8 +82,8 @@ async def wait_for_mid_climb(
     timeout: float = 20.0,
 ):
     """
-    Once the mission is actually taking off, wait until the selected UAV
-    is physically above the requested altitude while still TAKING_OFF.
+    Wait until the selected UAV is physically climbing and
+    has exceeded minimum_altitude while still TAKING_OFF.
     """
 
     start = asyncio.get_running_loop().time()
@@ -105,7 +107,7 @@ async def wait_for_mid_climb(
         ):
             raise RuntimeError(
                 f"{vehicle_name} failed before "
-                "the planned fault injection."
+                "the planned test injection."
             )
 
         if (
@@ -114,8 +116,8 @@ async def wait_for_mid_climb(
         ):
             raise RuntimeError(
                 f"{vehicle_name} completed takeoff "
-                "before the test could inject a "
-                "mid-climb failure."
+                "before a mid-climb fault could "
+                "be injected."
             )
 
         elapsed = (
@@ -193,7 +195,60 @@ async def main():
         ),
     )
 
+    # The remaining healthy fleet should continue
+    # executing the mission.
     await mission_task
+
+    print()
+    print("==============================")
+    print(" WAITING FOR FAILED UAV LAND")
+    print("==============================")
+    print()
+    print(
+        "Mission has finished, but UAV-2's "
+        "receiver remains active."
+    )
+    print(
+        "Waiting for ArduPilot LAND to reach "
+        "physical disarm..."
+    )
+    print()
+
+    # This wait intentionally ignores the UAV's FAILED
+    # mission state. The dedicated MAVLink receiver still
+    # observes heartbeat and altitude while LAND executes.
+    await vehicle.wait_until_disarmed(
+        timeout=90.0,
+    )
+
+    # Give GLOBAL_POSITION_INT a moment to reflect the
+    # final ground-state altitude after disarm.
+    await asyncio.sleep(0.5)
+
+    print()
+    print("==============================")
+    print("      PHYSICAL UAV STATUS")
+    print("==============================")
+    print(
+        f"Mission state: "
+        f"{vehicle.status.state.value}"
+    )
+    print(
+        f"Flight mode: "
+        f"{vehicle.status.flight_mode}"
+    )
+    print(
+        f"Altitude: "
+        f"{vehicle.status.altitude:.2f}m"
+    )
+    print(
+        f"Armed: "
+        f"{vehicle.status.armed}"
+    )
+    print(
+        f"Healthy: "
+        f"{vehicle.status.healthy}"
+    )
 
     print()
     print("==============================")
@@ -204,8 +259,8 @@ async def main():
         f"{coordinator.status.state.value}"
     )
     print(
-        f"UAV-2 state: "
-        f"{coordinator.fleet['UAV-2'].status.state.value}"
+        f"UAV-2 mission state: "
+        f"{vehicle.status.state.value}"
     )
     print(
         f"Failed UAVs: "
@@ -219,9 +274,7 @@ async def main():
     assert altitude_before_failure >= 1.0
 
     assert (
-        coordinator.fleet[
-            "UAV-2"
-        ].status.state
+        vehicle.status.state
         == UAVState.FAILED
     )
 
@@ -240,9 +293,25 @@ async def main():
         == MissionState.COMPLETED
     )
 
+    # This is the important new assertion:
+    # the failed UAV physically completed ArduPilot LAND.
+    assert (
+        vehicle.status.armed
+        is False
+    )
+
+    # SITL relative altitude can end slightly above or
+    # below zero because of estimator noise.
+    assert abs(
+        vehicle.status.altitude
+    ) < 0.5
+
     print()
     print(
-        "MID-CLIMB TAKEOFF FAILURE TEST: PASS"
+        "MID-CLIMB FAILURE RECOVERY: PASS"
+    )
+    print(
+        "SAFE FAILED-UAV DESCENT: PASS"
     )
 
 

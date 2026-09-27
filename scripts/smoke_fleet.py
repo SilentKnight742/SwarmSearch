@@ -8,7 +8,31 @@ from swarmsearch.config import (
 from swarmsearch.vehicle import Vehicle
 
 
+IMPORTANT_EVENTS = {
+    "uav.state_changed",
+    "uav.connecting",
+    "uav.connected",
+    "uav.home_wait",
+    "uav.home_ready",
+    "uav.ekf_wait",
+    "uav.ekf_ready",
+    "uav.ready",
+    "uav.mode_requested",
+    "uav.mode_changed",
+    "uav.arming_started",
+    "uav.armed",
+    "uav.takeoff_started",
+    "uav.airborne",
+    "uav.landing_started",
+    "uav.landed",
+    "uav.failed",
+}
+
+
 def print_event(event):
+    if event.event_type not in IMPORTANT_EVENTS:
+        return
+
     print(
         f"[{event.source}] "
         f"{event.event_type}: "
@@ -30,47 +54,69 @@ async def main():
         in VEHICLES.items()
     }
 
-    print("\n=== CONNECT ===")
+    try:
+        print()
+        print("=== CONNECT ===")
 
-    await asyncio.gather(
-        *[
-            vehicle.connect()
-            for vehicle in fleet.values()
-        ]
-    )
+        await asyncio.gather(
+            *[
+                vehicle.connect()
+                for vehicle
+                in fleet.values()
+            ]
+        )
 
-    print("\n=== INITIALIZE ===")
+        print()
+        print("=== INITIALIZE ===")
 
-    await asyncio.gather(
-        *[
-            vehicle.initialize()
-            for vehicle in fleet.values()
-        ]
-    )
+        await asyncio.gather(
+            *[
+                vehicle.initialize()
+                for vehicle
+                in fleet.values()
+            ]
+        )
 
-    print("\n=== TAKEOFF ===")
+        print()
+        print("=== TAKEOFF ===")
 
-    await asyncio.gather(
-        *[
-            vehicle.launch()
-            for vehicle in fleet.values()
-        ]
-    )
+        await asyncio.gather(
+            *[
+                vehicle.launch()
+                for vehicle
+                in fleet.values()
+            ]
+        )
 
-    print("\n=== FLEET AIRBORNE ===")
+        print()
+        print("=== FLEET AIRBORNE ===")
 
-    await asyncio.sleep(5)
+        for vehicle in fleet.values():
+            print(
+                f"{vehicle.name}: "
+                f"{vehicle.status.altitude:.1f}m "
+                f"| {vehicle.status.flight_mode}"
+            )
 
-    print("\n=== LAND ===")
+        await asyncio.sleep(5)
 
-    await asyncio.gather(
-        *[
-            vehicle.land()
-            for vehicle in fleet.values()
-        ]
-    )
+        print()
+        print("=== LAND ===")
 
-    print("\n=== COMPLETE ===")
+        await asyncio.gather(
+            *[
+                vehicle.land()
+                for vehicle
+                in fleet.values()
+            ]
+        )
+
+        print()
+        print("=== COMPLETE ===")
+
+    finally:
+        for vehicle in fleet.values():
+            vehicle.close()
 
 
 if __name__ == "__main__":

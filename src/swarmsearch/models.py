@@ -30,7 +30,6 @@ class MissionState(str, Enum):
     ACTIVE = "active"
     RECOVERING = "recovering"
     LANDING = "landing"
-
     COMPLETED = "completed"
     PARTIAL = "partial"
     ABORTED = "aborted"
@@ -50,45 +49,10 @@ class GeoPosition:
     relative_altitude: float
 
 
-@dataclass
+@dataclass(frozen=True)
 class Waypoint:
     east: float
     north: float
-
-
-@dataclass
-class UAVStatus:
-    name: str
-    system_id: int
-
-    state: UAVState = UAVState.DISCONNECTED
-
-    altitude: float = 0.0
-
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-
-    current_waypoint: Optional[int] = None
-    total_waypoints: int = 0
-
-    current_task: Optional[str] = None
-
-    healthy: bool = True
-    failure_reason: Optional[str] = None
-
-    completed_waypoints: int = 0
-
-
-@dataclass
-class MissionStatus:
-    state: MissionState = MissionState.IDLE
-
-    total_waypoints: int = 0
-    completed_waypoints: int = 0
-
-    failed_uavs: list[str] = field(default_factory=list)
-
-    recovery_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -105,6 +69,44 @@ class RouteSegment:
     source_uav: str
     waypoints: list[Waypoint]
 
-    # primary = original search route
-    # recovery = inherited from a failed UAV
+    # "primary" = original route
+    # "recovery" = inherited from a failed UAV
     kind: str = "primary"
+
+
+@dataclass
+class UAVStatus:
+    name: str
+    system_id: int
+
+    state: UAVState = UAVState.DISCONNECTED
+
+    altitude: float = 0.0
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+    armed: bool = False
+    flight_mode: Optional[str] = None
+
+    current_waypoint: Optional[int] = None
+    total_waypoints: int = 0
+    current_task: Optional[str] = None
+
+    healthy: bool = True
+    failure_reason: Optional[str] = None
+
+    completed_waypoints: int = 0
+
+
+@dataclass
+class MissionStatus:
+    state: MissionState = MissionState.IDLE
+
+    total_waypoints: int = 0
+    completed_waypoints: int = 0
+
+    failed_uavs: list[str] = field(
+        default_factory=list
+    )
+
+    recovery_count: int = 0
