@@ -89,3 +89,22 @@ class MissionStatus:
     failed_uavs: list[str] = field(default_factory=list)
 
     recovery_count: int = 0
+
+
+@dataclass(frozen=True)
+class Zone:
+    x_min: float
+    y_min: float
+    x_max: float
+    y_max: float
+
+
+@dataclass
+class RouteSegment:
+    segment_id: str
+    source_uav: str
+    waypoints: list[Waypoint]
+
+    # primary = original search route
+    # recovery = inherited from a failed UAV
+    kind: str = "primary"
