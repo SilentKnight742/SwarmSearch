@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 from collections.abc import Callable
 from typing import Optional
@@ -22,6 +23,14 @@ from .state_machine import validate_transition
 
 
 EventSink = Callable[[SwarmEvent], None]
+
+
+class VehicleUnavailableError(RuntimeError):
+    """
+    Raised when the coordinator marks a UAV unavailable
+    while it is executing an active operation.
+    """
+    pass
 
 
 class Vehicle:
@@ -52,6 +61,13 @@ class Vehicle:
             else lambda event: None
         )
 
+        # Failure injection is represented as a thread-safe flag.
+        #
+        # This lets the coordinator request a failure without starting
+        # another MAVLink telemetry reader on this vehicle.
+        self._failure_requested = threading.Event()
+        self._failure_reason: Optional[str] = None
+
     # ==================================================
     # EVENTS / STATE
     # ==================================================
@@ -71,7 +87,10 @@ class Vehicle:
             )
         )
 
-    def _set_state(self, new_state: UAVState):
+    def _set_state(
+        self,
+        new_state: UAVState,
+    ):
         old_state = self.status.state
 
         validate_transition(
@@ -86,6 +105,55 @@ class Vehicle:
             f"{old_state.value} -> {new_state.value}",
             previous_state=old_state.value,
             state=new_state.value,
+        )
+
+    def transition_to(
+        self,
+        state: UAVState,
+    ):
+        """
+        Public state transition used by the coordinator.
+
+        The actual transition still goes through validation.
+        """
+        self._set_state(state)
+
+    # ==================================================
+    # FAILURE REQUEST STATE
+    # ==================================================
+
+    @property
+    def failure_requested(self) -> bool:
+        return self._failure_requested.is_set()
+
+    @property
+    def failure_reason(self) -> Optional[str]:
+        return self._failure_reason
+
+    def request_failure(
+        self,
+        reason: str = "failure injected",
+    ):
+        """
+        Request that this UAV become unavailable.
+
+        This does not immediately consume telemetry or issue MAVLink
+        commands. The currently active vehicle operation detects this
+        flag and exits through VehicleUnavailableError.
+        """
+
+        if self.status.state == UAVState.FAILED:
+            return
+
+        if self._failure_requested.is_set():
+            return
+
+        self._failure_reason = reason
+        self._failure_requested.set()
+
+        self._emit(
+            "uav.failure_requested",
+            reason,
         )
 
     # ==================================================
@@ -111,9 +179,12 @@ class Vehicle:
             self.connection_string
         )
 
-        vehicle.wait_heartbeat(timeout=30)
+        vehicle.wait_heartbeat(
+            timeout=30
+        )
 
         self.connection = vehicle
+
         self.status.system_id = (
             vehicle.target_system
         )
@@ -149,7 +220,9 @@ class Vehicle:
 
         self.home_lat, self.home_lon = home
 
-        self._set_state(UAVState.READY)
+        self._set_state(
+            UAVState.READY
+        )
 
         self._emit(
             "uav.ready",
@@ -162,6 +235,7 @@ class Vehicle:
 
     def _initialize_blocking(self):
         home = self._wait_for_home_position()
+
         self._wait_for_position_estimate()
 
         return home
@@ -182,7 +256,16 @@ class Vehicle:
 
         while time.time() - start < timeout:
 
-            if time.time() - last_request >= 1:
+            if self._failure_requested.is_set():
+                raise VehicleUnavailableError(
+                    self._failure_reason
+                    or f"{self.name} unavailable"
+                )
+
+            if (
+                time.time() - last_request
+                >= 1
+            ):
                 vehicle.mav.command_long_send(
                     vehicle.target_system,
                     0,
@@ -211,15 +294,23 @@ class Vehicle:
             if msg is None:
                 continue
 
-            if msg.get_type() == "STATUSTEXT":
+            if (
+                msg.get_type()
+                == "STATUSTEXT"
+            ):
                 continue
 
             if (
                 msg.latitude != 0
                 and msg.longitude != 0
             ):
-                lat = msg.latitude / 1e7
-                lon = msg.longitude / 1e7
+                lat = (
+                    msg.latitude / 1e7
+                )
+
+                lon = (
+                    msg.longitude / 1e7
+                )
 
                 self._emit(
                     "uav.home_ready",
@@ -256,6 +347,12 @@ class Vehicle:
 
         while time.time() - start < timeout:
 
+            if self._failure_requested.is_set():
+                raise VehicleUnavailableError(
+                    self._failure_reason
+                    or f"{self.name} unavailable"
+                )
+
             msg = vehicle.recv_match(
                 type=[
                     "EKF_STATUS_REPORT",
@@ -268,7 +365,10 @@ class Vehicle:
             if msg is None:
                 continue
 
-            if msg.get_type() == "STATUSTEXT":
+            if (
+                msg.get_type()
+                == "STATUSTEXT"
+            ):
                 continue
 
             flags = msg.flags
@@ -327,11 +427,25 @@ class Vehicle:
                 f"{self.name} not connected."
             )
 
-        self._set_state(UAVState.ARMING)
+        if self._failure_requested.is_set():
+            raise VehicleUnavailableError(
+                self._failure_reason
+                or f"{self.name} unavailable"
+            )
+
+        self._set_state(
+            UAVState.ARMING
+        )
 
         await asyncio.to_thread(
             self._arm_blocking
         )
+
+        if self._failure_requested.is_set():
+            raise VehicleUnavailableError(
+                self._failure_reason
+                or f"{self.name} unavailable"
+            )
 
         self._set_state(
             UAVState.TAKING_OFF
@@ -343,20 +457,34 @@ class Vehicle:
                 f"Taking off to "
                 f"{self.cruise_altitude:.1f}m"
             ),
-            target_altitude=self.cruise_altitude,
+            target_altitude=(
+                self.cruise_altitude
+            ),
         )
 
+        # Still uses the proven legacy takeoff implementation.
+        #
+        # It is not yet fully interruptible while physically climbing.
+        # We will replace this in the next stage.
         await asyncio.to_thread(
             takeoff,
             self.connection,
             self.cruise_altitude,
         )
 
+        if self._failure_requested.is_set():
+            raise VehicleUnavailableError(
+                self._failure_reason
+                or f"{self.name} unavailable"
+            )
+
         self.status.altitude = (
             self.cruise_altitude
         )
 
-        self._set_state(UAVState.AIRBORNE)
+        self._set_state(
+            UAVState.AIRBORNE
+        )
 
         self._emit(
             "uav.airborne",
@@ -364,16 +492,32 @@ class Vehicle:
                 f"Airborne at "
                 f"{self.cruise_altitude:.1f}m"
             ),
-            altitude=self.cruise_altitude,
+            altitude=(
+                self.cruise_altitude
+            ),
         )
 
     def _arm_blocking(self):
+        if self._failure_requested.is_set():
+            raise VehicleUnavailableError(
+                self._failure_reason
+                or f"{self.name} unavailable"
+            )
+
         set_mode(
             self.connection,
             "GUIDED",
         )
 
-        arm(self.connection)
+        if self._failure_requested.is_set():
+            raise VehicleUnavailableError(
+                self._failure_reason
+                or f"{self.name} unavailable"
+            )
+
+        arm(
+            self.connection
+        )
 
     # ==================================================
     # WAYPOINT NAVIGATION
@@ -387,6 +531,13 @@ class Vehicle:
         arrival_radius: float = 2.0,
         timeout: float = 30,
     ) -> float:
+
+        if self._failure_requested.is_set():
+            raise VehicleUnavailableError(
+                self._failure_reason
+                or f"{self.name} unavailable"
+            )
+
         return await asyncio.to_thread(
             self._fly_to_blocking,
             waypoint,
@@ -404,6 +555,12 @@ class Vehicle:
         arrival_radius: float,
         timeout: float,
     ) -> float:
+
+        if self._failure_requested.is_set():
+            raise VehicleUnavailableError(
+                self._failure_reason
+                or f"{self.name} unavailable"
+            )
 
         target_lat, target_lon = (
             offset_position(
@@ -424,7 +581,8 @@ class Vehicle:
         self._emit(
             "uav.waypoint_started",
             (
-                f"Flying to east={waypoint.east:.1f}, "
+                f"Flying to "
+                f"east={waypoint.east:.1f}, "
                 f"north={waypoint.north:.1f}"
             ),
             east=waypoint.east,
@@ -435,6 +593,20 @@ class Vehicle:
 
         while time.time() - start < timeout:
 
+            # --------------------------------------------------
+            # RUNTIME FAILURE CHECK
+            # --------------------------------------------------
+            #
+            # This is intentionally checked inside the existing
+            # telemetry consumer instead of creating another thread
+            # that calls recv_match() on the same connection.
+            #
+            if self._failure_requested.is_set():
+                raise VehicleUnavailableError(
+                    self._failure_reason
+                    or f"{self.name} unavailable"
+                )
+
             msg = self.connection.recv_match(
                 type="GLOBAL_POSITION_INT",
                 blocking=True,
@@ -444,10 +616,17 @@ class Vehicle:
             if msg is None:
                 continue
 
-            latitude = msg.lat / 1e7
-            longitude = msg.lon / 1e7
+            latitude = (
+                msg.lat / 1e7
+            )
+
+            longitude = (
+                msg.lon / 1e7
+            )
+
             altitude = (
-                msg.relative_alt / 1000.0
+                msg.relative_alt
+                / 1000.0
             )
 
             self.status.latitude = latitude
@@ -461,14 +640,16 @@ class Vehicle:
                 target_lon,
             )
 
-            if remaining <= arrival_radius:
-
+            if (
+                remaining
+                <= arrival_radius
+            ):
                 self.status.completed_waypoints += 1
 
                 self._emit(
                     "uav.waypoint_reached",
                     (
-                        f"Waypoint reached "
+                        "Waypoint reached "
                         f"(error={remaining:.2f}m)"
                     ),
                     east=waypoint.east,
@@ -490,16 +671,39 @@ class Vehicle:
         if self.connection is None:
             return
 
-        if not self.connection.motors_armed():
+        if (
+            not self.connection.motors_armed()
+        ):
+            if (
+                self.status.state
+                != UAVState.FAILED
+            ):
+                if (
+                    self.status.state
+                    != UAVState.LANDED
+                ):
+                    self._set_state(
+                        UAVState.LANDED
+                    )
+
             return
 
-        self._set_state(UAVState.LANDING)
+        if (
+            self.status.state
+            != UAVState.FAILED
+        ):
+            self._set_state(
+                UAVState.LANDING
+            )
 
         self._emit(
             "uav.landing_started",
             "Landing",
         )
 
+        # Still uses the proven legacy landing implementation.
+        #
+        # Full mid-landing failure interruption comes next.
         await asyncio.to_thread(
             land,
             self.connection,
@@ -507,7 +711,13 @@ class Vehicle:
 
         self.status.altitude = 0.0
 
-        self._set_state(UAVState.LANDED)
+        if (
+            self.status.state
+            != UAVState.FAILED
+        ):
+            self._set_state(
+                UAVState.LANDED
+            )
 
         self._emit(
             "uav.landed",
@@ -522,24 +732,37 @@ class Vehicle:
         self,
         reason: str = "failure injected",
     ):
-        if self.status.state == UAVState.FAILED:
+        """
+        Finalize a previously requested failure.
+
+        V1 semantics:
+        - remove the UAV from the active mission
+        - mark it FAILED
+        - if communication still exists and the vehicle is armed,
+          request a safe LAND
+        """
+
+        if (
+            self.status.state
+            == UAVState.FAILED
+        ):
             return
+
+        self._failure_reason = reason
+        self._failure_requested.set()
 
         self.status.healthy = False
         self.status.failure_reason = reason
 
-        self._set_state(UAVState.FAILED)
+        self._set_state(
+            UAVState.FAILED
+        )
 
         self._emit(
             "uav.failed",
             reason,
         )
 
-        # V1 fault injection represents the coordinator
-        # withdrawing the vehicle from the mission.
-        #
-        # If communication still works and the aircraft
-        # is airborne, request a safe LAND.
         if (
             self.connection is not None
             and self.connection.motors_armed()
@@ -554,8 +777,8 @@ class Vehicle:
                 self._emit(
                     "uav.failure_land_requested",
                     (
-                        "Safe LAND requested after "
-                        "fault injection"
+                        "Safe LAND requested "
+                        "after fault injection"
                     ),
                 )
 
