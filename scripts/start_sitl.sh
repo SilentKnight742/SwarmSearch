@@ -1,29 +1,43 @@
 #!/usr/bin/env bash
 
-set -e
+set -Eeuo pipefail
+
 
 ARDUPILOT_DIR="${ARDUPILOT_DIR:-$HOME/tools/ardupilot}"
-ARDUPILOT_VENV="$ARDUPILOT_DIR/.venv"
-ARDUPILOT_PYTHON="$ARDUPILOT_VENV/bin/python"
 
-if [[ ! -x "$ARDUPILOT_PYTHON" ]]; then
-    echo "ArduPilot Python not found:"
-    echo "  $ARDUPILOT_PYTHON"
+ARDUPILOT_VENV="$ARDUPILOT_DIR/.venv"
+
+
+if [[ ! -d "$ARDUPILOT_DIR" ]]; then
+    echo "ArduPilot directory not found:"
+    echo "  $ARDUPILOT_DIR"
     exit 1
 fi
 
-# Important:
-# The user may currently have the SwarmSearch venv activated.
-# sim_vehicle.py launches Waf subprocesses which discover `python`
-# via PATH, so make the ArduPilot venv the first Python environment.
-export PATH="$ARDUPILOT_VENV/bin:$PATH"
 
-# Prevent the active SwarmSearch venv from leaking into ArduPilot tooling.
+if [[ -x "$ARDUPILOT_VENV/bin/python" ]]; then
+    ARDUPILOT_PYTHON="$ARDUPILOT_VENV/bin/python"
+
+    export PATH="$ARDUPILOT_VENV/bin:$PATH"
+
+elif [[ -x "/usr/bin/python3" ]]; then
+    ARDUPILOT_PYTHON="/usr/bin/python3"
+
+    export PATH="$HOME/.local/bin:$PATH"
+
+else
+    echo "No usable Python installation found for ArduPilot."
+    exit 1
+fi
+
+
 unset VIRTUAL_ENV
 unset PYTHONHOME
 unset PYTHONPATH
 
+
 cd "$ARDUPILOT_DIR"
+
 
 exec "$ARDUPILOT_PYTHON" \
     ./Tools/autotest/sim_vehicle.py \
