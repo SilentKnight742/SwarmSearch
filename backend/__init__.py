@@ -1,0 +1,3 @@
+"""
+SwarmSearch mission-control backend.
+"""

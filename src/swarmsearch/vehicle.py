@@ -61,20 +61,8 @@ class Vehicle:
             else lambda event: None
         )
 
-        # --------------------------------------------------
-        # FAILURE CONTROL
-        # --------------------------------------------------
-
         self._failure_requested = threading.Event()
         self._failure_reason: Optional[str] = None
-
-        # --------------------------------------------------
-        # MAVLINK RECEIVER
-        # --------------------------------------------------
-        #
-        # This is the ONLY thread allowed to call recv_match()
-        # after the connection has been established.
-        #
 
         self._receiver_stop = threading.Event()
 
@@ -82,7 +70,6 @@ class Vehicle:
             threading.Thread
         ] = None
 
-        # Shared state produced by receiver thread.
         self._condition = threading.Condition()
 
         self._heartbeat_received = False
@@ -93,8 +80,9 @@ class Vehicle:
 
         self._ekf_flags: Optional[int] = None
 
-        # command -> deque of MAV_RESULT values
-        self._command_acks = defaultdict(deque)
+        self._command_acks = defaultdict(
+            deque
+        )
 
     # ==================================================
     # EVENTS
@@ -146,7 +134,9 @@ class Vehicle:
         self,
         state: UAVState,
     ):
-        self._set_state(state)
+        self._set_state(
+            state
+        )
 
     # ==================================================
     # FAILURE CONTROL
@@ -184,7 +174,9 @@ class Vehicle:
         with self._condition:
             self._condition.notify_all()
 
-    def _raise_if_failure_requested(self):
+    def _raise_if_failure_requested(
+        self,
+    ):
         if self._failure_requested.is_set():
             raise VehicleUnavailableError(
                 self._failure_reason
@@ -225,7 +217,6 @@ class Vehicle:
             timeout=30
         )
 
-        # Ask for live position telemetry.
         self._request_message_interval(
             mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT,
             5,
@@ -253,10 +244,14 @@ class Vehicle:
 
         self._receiver_stop.clear()
 
-        self._receiver_thread = threading.Thread(
-            target=self._receiver_loop,
-            name=f"{self.name}-mavlink-rx",
-            daemon=True,
+        self._receiver_thread = (
+            threading.Thread(
+                target=self._receiver_loop,
+                name=(
+                    f"{self.name}-mavlink-rx"
+                ),
+                daemon=True,
+            )
         )
 
         self._receiver_thread.start()
@@ -264,9 +259,11 @@ class Vehicle:
     def _receiver_loop(self):
         while not self._receiver_stop.is_set():
             try:
-                msg = self.connection.recv_match(
-                    blocking=True,
-                    timeout=0.5,
+                msg = (
+                    self.connection.recv_match(
+                        blocking=True,
+                        timeout=0.5,
+                    )
                 )
 
             except Exception as exc:
@@ -293,28 +290,57 @@ class Vehicle:
                 continue
 
             if msg_type == "HEARTBEAT":
-                self._handle_heartbeat(msg)
+                self._handle_heartbeat(
+                    msg
+                )
 
-            elif msg_type == "GLOBAL_POSITION_INT":
-                self._handle_position(msg)
+            elif (
+                msg_type
+                == "GLOBAL_POSITION_INT"
+            ):
+                self._handle_position(
+                    msg
+                )
 
-            elif msg_type == "HOME_POSITION":
-                self._handle_home_position(msg)
+            elif (
+                msg_type
+                == "HOME_POSITION"
+            ):
+                self._handle_home_position(
+                    msg
+                )
 
-            elif msg_type == "EKF_STATUS_REPORT":
-                self._handle_ekf(msg)
+            elif (
+                msg_type
+                == "EKF_STATUS_REPORT"
+            ):
+                self._handle_ekf(
+                    msg
+                )
 
-            elif msg_type == "COMMAND_ACK":
-                self._handle_command_ack(msg)
+            elif (
+                msg_type
+                == "COMMAND_ACK"
+            ):
+                self._handle_command_ack(
+                    msg
+                )
 
-            elif msg_type == "STATUSTEXT":
-                self._handle_statustext(msg)
+            elif (
+                msg_type
+                == "STATUSTEXT"
+            ):
+                self._handle_statustext(
+                    msg
+                )
 
     def _handle_heartbeat(
         self,
         msg,
     ):
-        system_id = msg.get_srcSystem()
+        system_id = (
+            msg.get_srcSystem()
+        )
 
         armed = bool(
             msg.base_mode
@@ -323,27 +349,38 @@ class Vehicle:
 
         try:
             flight_mode = (
-                mavutil.mode_string_v10(msg)
+                mavutil.mode_string_v10(
+                    msg
+                )
             )
 
         except Exception:
             flight_mode = None
 
         with self._condition:
-            self.status.system_id = system_id
+            self.status.system_id = (
+                system_id
+            )
+
             self.status.armed = armed
-            self.status.flight_mode = flight_mode
 
-            self._heartbeat_received = True
+            self.status.flight_mode = (
+                flight_mode
+            )
 
-            # Keep pymavlink's target identifiers aligned with
-            # the heartbeat source.
-            self.connection.target_system = system_id
+            self._heartbeat_received = (
+                True
+            )
+
+            self.connection.target_system = (
+                system_id
+            )
 
             try:
                 self.connection.target_component = (
                     msg.get_srcComponent()
                 )
+
             except Exception:
                 pass
 
@@ -362,21 +399,24 @@ class Vehicle:
         )
 
         altitude = (
-            msg.relative_alt
-            / 1000.0
+            msg.relative_alt / 1000.0
         )
 
         with self._condition:
-            self.status.latitude = latitude
-            self.status.longitude = longitude
-            self.status.altitude = altitude
+            self.status.latitude = (
+                latitude
+            )
+
+            self.status.longitude = (
+                longitude
+            )
+
+            self.status.altitude = (
+                altitude
+            )
 
             self._condition.notify_all()
 
-        # This is intentionally emitted at telemetry frequency.
-        #
-        # CLI scripts can filter it.
-        # WebSocket clients will use it for live visualization.
         self._emit(
             "uav.telemetry",
             "Telemetry update",
@@ -384,9 +424,15 @@ class Vehicle:
             longitude=longitude,
             altitude=altitude,
             armed=self.status.armed,
-            flight_mode=self.status.flight_mode,
-            mission_state=self.status.state.value,
-            healthy=self.status.healthy,
+            flight_mode=(
+                self.status.flight_mode
+            ),
+            mission_state=(
+                self.status.state.value
+            ),
+            healthy=(
+                self.status.healthy
+            ),
         )
 
     def _handle_home_position(
@@ -420,7 +466,9 @@ class Vehicle:
         msg,
     ):
         with self._condition:
-            self._ekf_flags = msg.flags
+            self._ekf_flags = (
+                msg.flags
+            )
 
             self._condition.notify_all()
 
@@ -444,12 +492,17 @@ class Vehicle:
         try:
             text = msg.text
 
-            if isinstance(text, bytes):
+            if isinstance(
+                text,
+                bytes,
+            ):
                 text = text.decode(
                     errors="replace"
                 )
 
-            text = text.rstrip("\x00")
+            text = text.rstrip(
+                "\x00"
+            )
 
         except Exception:
             return
@@ -612,7 +665,9 @@ class Vehicle:
         return home
 
     def _initialize_blocking(self):
-        home = self._wait_for_home_position()
+        home = (
+            self._wait_for_home_position()
+        )
 
         self._wait_for_position_estimate()
 
@@ -642,11 +697,16 @@ class Vehicle:
                     self._home_position
                     is not None
                 ):
-                    home = self._home_position
+                    home = (
+                        self._home_position
+                    )
 
                     self._emit(
                         "uav.home_ready",
-                        "Home position established",
+                        (
+                            "Home position "
+                            "established"
+                        ),
                         latitude=home[0],
                         longitude=home[1],
                     )
@@ -667,7 +727,8 @@ class Vehicle:
             if now >= deadline:
                 raise TimeoutError(
                     f"{self.name}: "
-                    "home position not established."
+                    "home position "
+                    "not established."
                 )
 
             with self._condition:
@@ -680,13 +741,16 @@ class Vehicle:
         timeout: float = 45,
     ):
         self._request_message_interval(
-            193,  # EKF_STATUS_REPORT
+            193,
             2,
         )
 
         self._emit(
             "uav.ekf_wait",
-            "Waiting for EKF position estimate",
+            (
+                "Waiting for EKF "
+                "position estimate"
+            ),
         )
 
         EKF_ATTITUDE = 1
@@ -714,7 +778,9 @@ class Vehicle:
             self._raise_if_failure_requested()
 
             with self._condition:
-                flags = self._ekf_flags
+                flags = (
+                    self._ekf_flags
+                )
 
                 if flags is not None:
                     ready = (
@@ -798,7 +864,10 @@ class Vehicle:
 
         self._emit(
             "uav.mode_requested",
-            f"Mode requested: {mode_name}",
+            (
+                f"Mode requested: "
+                f"{mode_name}"
+            ),
             mode=mode_name,
         )
 
@@ -820,7 +889,10 @@ class Vehicle:
 
         self._emit(
             "uav.mode_changed",
-            f"Mode changed to {mode_name}",
+            (
+                f"Mode changed to "
+                f"{mode_name}"
+            ),
             mode=mode_name,
         )
 
@@ -850,7 +922,6 @@ class Vehicle:
 
         with self._condition:
             while True:
-
                 queue = (
                     self._command_acks[
                         command
@@ -858,7 +929,9 @@ class Vehicle:
                 )
 
                 if queue:
-                    return queue.popleft()
+                    return (
+                        queue.popleft()
+                    )
 
                 if failure_sensitive:
                     self._raise_if_failure_requested()
@@ -981,9 +1054,11 @@ class Vehicle:
             "Arming motors",
         )
 
-        ack = self._wait_for_command_ack(
-            command,
-            timeout=5,
+        ack = (
+            self._wait_for_command_ack(
+                command,
+                timeout=5,
+            )
         )
 
         if ack is not None:
@@ -994,8 +1069,9 @@ class Vehicle:
 
             if ack not in accepted:
                 raise RuntimeError(
-                    f"{self.name}: arm command "
-                    f"rejected with result {ack}."
+                    f"{self.name}: "
+                    "arm command rejected "
+                    f"with result {ack}."
                 )
 
         self._wait_for_predicate(
@@ -1047,9 +1123,11 @@ class Vehicle:
             target_altitude,
         )
 
-        ack = self._wait_for_command_ack(
-            command,
-            timeout=5,
+        ack = (
+            self._wait_for_command_ack(
+                command,
+                timeout=5,
+            )
         )
 
         if ack is not None:
@@ -1060,8 +1138,9 @@ class Vehicle:
 
             if ack not in accepted:
                 raise RuntimeError(
-                    f"{self.name}: takeoff "
-                    f"rejected with result {ack}."
+                    f"{self.name}: "
+                    "takeoff rejected "
+                    f"with result {ack}."
                 )
 
         self._wait_for_predicate(
@@ -1088,7 +1167,6 @@ class Vehicle:
         arrival_radius: float = 2.0,
         timeout: float = 30,
     ) -> float:
-
         self._raise_if_failure_requested()
 
         return await asyncio.to_thread(
@@ -1108,7 +1186,6 @@ class Vehicle:
         arrival_radius: float,
         timeout: float,
     ) -> float:
-
         self._raise_if_failure_requested()
 
         (
@@ -1159,11 +1236,13 @@ class Vehicle:
                     latitude is not None
                     and longitude is not None
                 ):
-                    remaining = distance_m(
-                        latitude,
-                        longitude,
-                        target_lat,
-                        target_lon,
+                    remaining = (
+                        distance_m(
+                            latitude,
+                            longitude,
+                            target_lat,
+                            target_lon,
+                        )
                     )
 
                     if (
@@ -1206,8 +1285,6 @@ class Vehicle:
         longitude: float,
         altitude: float,
     ):
-        # Ignore velocity, acceleration, yaw and yaw-rate.
-        # Position + relative altitude remain active.
         type_mask = (
             0b0000111111111000
         )
@@ -1348,6 +1425,10 @@ class Vehicle:
         ):
             return
 
+        failure_phase = (
+            self.status.state
+        )
+
         self._failure_reason = reason
         self._failure_requested.set()
 
@@ -1361,18 +1442,67 @@ class Vehicle:
         self._emit(
             "uav.failed",
             reason,
+            failure_phase=(
+                failure_phase.value
+            ),
         )
 
-        # Mission-level failure does not mean the flight controller
-        # has died. If communication still exists, withdraw the UAV
-        # by commanding LAND.
+        if self.connection is None:
+            return
+
+        # ----------------------------------------------
+        # GROUND / ARMING FAILURE
+        # ----------------------------------------------
         #
-        # Crucially, the dedicated receiver remains alive, so its
-        # physical descent continues to be observable.
-        if (
-            self.connection is not None
-            and self.status.armed
-        ):
+        # If an ARM command was already sent, sending DISARM after it
+        # closes the race where our cached heartbeat has not yet
+        # reported the armed state.
+        #
+
+        if failure_phase in {
+            UAVState.READY,
+            UAVState.ARMING,
+        }:
+            if (
+                failure_phase
+                == UAVState.ARMING
+            ):
+                try:
+                    await asyncio.to_thread(
+                        self._disarm_after_failure_blocking
+                    )
+
+                except Exception as exc:
+                    self._emit(
+                        "uav.failure_disarm_failed",
+                        (
+                            "Unable to guarantee "
+                            "safe disarm after "
+                            f"arming failure: {exc}"
+                        ),
+                    )
+
+            return
+
+        # ----------------------------------------------
+        # AIRBORNE / FLIGHT FAILURE
+        # ----------------------------------------------
+
+        should_land = (
+            self.status.armed
+            or self.status.altitude > 0.5
+            or failure_phase
+            in {
+                UAVState.TAKING_OFF,
+                UAVState.AIRBORNE,
+                UAVState.SEARCHING,
+                UAVState.RECOVERING,
+                UAVState.RETURNING,
+                UAVState.LANDING,
+            }
+        )
+
+        if should_land:
             try:
                 await asyncio.to_thread(
                     self._land_after_failure_blocking
@@ -1388,11 +1518,84 @@ class Vehicle:
                     ),
                 )
 
-    def _land_after_failure_blocking(self):
-        # We only need to ensure LAND mode has been accepted here.
-        #
-        # Do NOT wait for full touchdown, because the failed UAV has
-        # already been removed from mission scheduling.
+    def _disarm_after_failure_blocking(
+        self,
+        timeout: float = 10,
+    ):
+        command = (
+            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM
+        )
+
+        self._clear_command_acks(
+            command
+        )
+
+        self.connection.mav.command_long_send(
+            self.connection.target_system,
+            mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1,
+            command,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+
+        self._emit(
+            "uav.failure_disarm_requested",
+            (
+                "Safe DISARM requested "
+                "after arming-phase failure"
+            ),
+        )
+
+        ack = (
+            self._wait_for_command_ack(
+                command,
+                timeout=3,
+                failure_sensitive=False,
+            )
+        )
+
+        if ack is not None:
+            accepted = {
+                mavutil.mavlink.MAV_RESULT_ACCEPTED,
+                mavutil.mavlink.MAV_RESULT_IN_PROGRESS,
+            }
+
+            if ack not in accepted:
+                raise RuntimeError(
+                    "disarm command rejected "
+                    f"with result {ack}"
+                )
+
+        self._wait_for_predicate(
+            predicate=lambda: (
+                not self.status.armed
+            ),
+            timeout=timeout,
+            timeout_message=(
+                f"{self.name}: "
+                "vehicle remained armed "
+                "after failure."
+            ),
+            failure_sensitive=False,
+        )
+
+        self._emit(
+            "uav.failure_disarmed",
+            (
+                "Vehicle confirmed "
+                "disarmed after failure"
+            ),
+        )
+
+    def _land_after_failure_blocking(
+        self,
+    ):
         self._set_mode_blocking(
             "LAND",
             timeout=10,
@@ -1408,20 +1611,13 @@ class Vehicle:
         )
 
     # ==================================================
-    # TELEMETRY / PHYSICAL STATE HELPERS
+    # PHYSICAL STATE HELPERS
     # ==================================================
 
     async def wait_until_disarmed(
         self,
         timeout: float = 90,
     ):
-        """
-        Useful for tests and later backend observability.
-
-        Unlike normal mission operations this remains valid even when
-        the UAV's mission state is FAILED.
-        """
-
         await asyncio.to_thread(
             self._wait_until_disarmed_blocking,
             timeout,
@@ -1438,7 +1634,7 @@ class Vehicle:
             timeout=timeout,
             timeout_message=(
                 f"{self.name}: "
-                "did not disarm after LAND."
+                "did not disarm."
             ),
             failure_sensitive=False,
         )
